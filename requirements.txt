@@ -3,4 +3,4 @@ pandas
 numpy
 openpyxl
 pyxlsb
-pywin32
+xlrd

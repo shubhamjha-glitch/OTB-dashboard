@@ -523,143 +523,55 @@ def dataframe_to_excel(df, sheet_name="DATA"):
     return bio.getvalue()
 
 # ============================================================
-# LIVE PIVOT TABLE - EXCEL DESKTOP / PYWIN32
-# Tabular layout + repeat labels + subtotal only Division
+# CLOUD-SAFE OTB EXCEL OUTPUT
+# Works on Streamlit Cloud/Linux - no pywin32 / Excel Desktop
 # ============================================================
-def create_live_pivot_excel(df, mode="regular"):
-    """Create a real Excel PivotTable; formulas are Pivot Calculated Fields, not DATA columns."""
-    try:
-        import win32com.client as win32
-    except ImportError:
-        raise RuntimeError("pywin32 is required. Run: python -m pip install pywin32")
-    if df is None or df.empty:
-        raise ValueError(f"No {mode} data available for PivotTable.")
+def create_otb_excel(df, mode="regular"):
+    """
+    Create a cloud-safe Excel workbook containing:
+      1) source/base DATA
+      2) calculated OTB output
 
+    This intentionally does not create a native Excel PivotTable because
+    Streamlit Cloud runs on Linux and Microsoft Excel/COM is unavailable.
+    """
     mode = mode.lower()
+    if df is None or df.empty:
+        raise ValueError(f"No {mode} data available.")
+
     if mode == "regular":
         data_fields = REGULAR_DATA_FIELDS
-        row_fields = ["DIVISION", "SECTION", "DEPARTMENT", "ART_NM", "ATTRIBUTE", "ART_STATUS", "PREFERENCE"]
-        calculated_fields = REGULAR_CALCULATED_FIELDS
+        output_fields = REGULAR_OUTPUT
+        data_sheet = "REGULAR DATA"
+        otb_sheet = "OTB-REGULAR"
+        calculated = calculate_regular(df.copy())
     else:
         data_fields = WINTER_DATA_FIELDS
-        row_fields = ["DIVISION", "SECTION", "DEPARTMENT", "ART_NM", "ATTRIBUTE", "PREFERENCE", "ART_STATUS"]
-        calculated_fields = WINTER_CALCULATED_FIELDS
+        output_fields = WINTER_OUTPUT
+        data_sheet = "WINTER DATA"
+        otb_sheet = "OTB-WINTER"
+        calculated = calculate_winter(df.copy())
 
-    missing = [c for c in data_fields if c not in df.columns]
-    if missing:
-        raise ValueError(f"{mode.title()} DATA is missing fields: {', '.join(missing)}")
-    source_df = df[data_fields].copy()
+    source_df = df[[c for c in data_fields if c in df.columns]].copy()
+    output_df = calculated[[c for c in output_fields if c in calculated.columns]].copy()
 
-    temp_dir = tempfile.mkdtemp(prefix="buyplan_otb_")
-    source_path = os.path.join(temp_dir, f"{mode.upper()}_DATA.xlsx")
-    output_path = os.path.join(temp_dir, f"BUY_PLAN_OTB_{mode.upper()}_LIVE_PIVOT.xlsx")
-    with pd.ExcelWriter(source_path, engine="openpyxl") as writer:
-        source_df.to_excel(writer, index=False, sheet_name="DATA")
-        style_excel_sheet(writer.book["DATA"])
+    bio = BytesIO()
+    with pd.ExcelWriter(bio, engine="openpyxl") as writer:
+        source_df.to_excel(writer, index=False, sheet_name=data_sheet)
+        output_df.to_excel(writer, index=False, sheet_name=otb_sheet)
 
-    excel = wb = None
-    try:
-        excel = win32.DispatchEx("Excel.Application")
-        excel.Visible = False
-        excel.DisplayAlerts = False
-        wb = excel.Workbooks.Open(os.path.abspath(source_path))
-        ws = wb.Worksheets("DATA")
-        source_range = ws.Range(ws.Cells(1,1), ws.Cells(ws.UsedRange.Rows.Count, ws.UsedRange.Columns.Count))
-        table = ws.ListObjects.Add(1, source_range, None, 1)
-        table.Name = "OTBData"
-        pivot_ws = wb.Worksheets.Add(After=ws)
-        pivot_ws.Name = "LIVE PIVOT"
-        pivot_ws.Range("A1").Value = f"BUY PLAN – OTB | {mode.upper()} LIVE PIVOT"
-        pivot_ws.Range("A1").Font.Name = "Aptos"
-        pivot_ws.Range("A1").Font.Size = 8
-        pivot_ws.Range("A1").Font.Bold = True
+        for sheet in [data_sheet, otb_sheet]:
+            ws = writer.book[sheet]
+            style_excel_sheet(ws)
+            for idx, col in enumerate(
+                source_df.columns if sheet == data_sheet else output_df.columns, start=1
+            ):
+                if "%" in str(col):
+                    for r in range(2, ws.max_row + 1):
+                        ws.cell(r, idx).number_format = "0.0%"
 
-        cache = wb.PivotCaches().Create(SourceType=1, SourceData="OTBData")
-        pivot = cache.CreatePivotTable(TableDestination="'LIVE PIVOT'!R3C1", TableName="OTB_Live_Pivot")
-
-        for pos, field in enumerate(row_fields, start=1):
-            pf = pivot.PivotFields(field)
-            pf.Orientation = 1
-            pf.Position = pos
-            for i in range(1,13):
-                try: pf.Subtotals[i] = False
-                except Exception: pass
-
-        try: pivot.RowAxisLayout(1)
-        except Exception: pass
-        try: pivot.RepeatAllLabels(2)
-        except Exception: pass
-
-        # Base numeric fields -> normal Pivot values.
-        for field in [c for c in data_fields if c not in row_fields]:
-            pf = pivot.PivotFields(field)
-            data_field = pivot.AddDataField(pf, f"Sum of {field}", -4157)
-            data_field.NumberFormat = "#,##0.00"
-
-        # Formula fields -> TRUE PivotTable Calculated Fields.
-        calc_collection = pivot.CalculatedFields()
-        for name, formula in calculated_fields.items():
-            try:
-                calc_collection.Item(name).Delete()
-            except Exception:
-                pass
-            try:
-                calc_collection.Add(name, formula, True)
-                # Excel does not immediately expose a newly-created calculated
-                # field through PivotFields. Refresh before adding it to Values.
-                pivot.RefreshTable()
-                try:
-                    wb.RefreshAll()
-                except Exception:
-                    pass
-                pf = pivot.PivotFields(name)
-
-                # Excel can raise 0x800A03EC when AddDataField is used on a
-                # PivotTable Calculated Field. Put the field in Values directly.
-                pf.Orientation = 4   # xlDataField
-                try:
-                    pf.Function = -4157  # xlSum
-                except Exception:
-                    pass
-                try:
-                    pf.Name = name
-                except Exception:
-                    pass
-                try:
-                    pf.NumberFormat = "0.0%" if "%" in name else "#,##0.00"
-                except Exception:
-                    pass
-            except Exception as exc:
-                raise RuntimeError(
-                    f"Could not add calculated field '{name}' to Pivot. "
-                    f"Formula: {formula}. Excel error: {exc}"
-                )
-
-        # NO subtotals + NO grand totals.
-        for field in row_fields:
-            pf = pivot.PivotFields(field)
-            for i in range(1,13):
-                try: pf.Subtotals[i] = False
-                except Exception: pass
-        pivot.RowGrand = False
-        pivot.ColumnGrand = False
-        pivot.HasAutoFormat = True
-        ws.Cells.Font.Name = "Aptos"; ws.Cells.Font.Size = 8
-        pivot_ws.Cells.Font.Name = "Aptos"; pivot_ws.Cells.Font.Size = 8
-        try: pivot_ws.Columns.AutoFit()
-        except Exception: pass
-
-        wb.SaveAs(os.path.abspath(output_path), FileFormat=51)
-        wb.Close(SaveChanges=True); wb = None
-        with open(output_path, "rb") as f:
-            return f.read()
-    finally:
-        try:
-            if wb is not None: wb.Close(SaveChanges=False)
-        except Exception: pass
-        try:
-            if excel is not None: excel.Quit()
-        except Exception: pass
+    bio.seek(0)
+    return bio.getvalue()
 
 # ============================================================
 # SIDEBAR INPUTS
@@ -938,7 +850,7 @@ with tab_winter:
 # ============================================================
 with tab_download:
     st.subheader("⬇️ Excel Downloads")
-    st.caption("DATA downloads contain base fields only (NO formula columns). OTB formulas are Excel PivotTable Calculated Fields. All sheets use Aptos 8; PivotTable uses Tabular Form, Repeat All Item Labels, NO subtotals and NO grand totals.")
+    st.caption("Cloud-safe Excel downloads include both the base DATA sheet and the calculated OTB output sheet. No Microsoft Excel Desktop or pywin32 is required.")
 
     st.markdown("### 🟦 Regular")
     regular_data_f = apply_filters(st.session_state.regular_data, filter_values)
@@ -950,22 +862,15 @@ with tab_download:
         use_container_width=True,
     )
 
-    if st.button("📊 Generate Regular Live PivotTable", use_container_width=True):
-        with st.spinner("Creating Regular Live PivotTable in Microsoft Excel..."):
-            try:
-                pivot_bytes = create_live_pivot_excel(regular_data_f, "regular")
-                st.session_state["regular_pivot_bytes"] = pivot_bytes
-                st.success("Regular Live PivotTable created.")
-            except Exception as e:
-                st.error(str(e))
-    if st.session_state.get("regular_pivot_bytes"):
-        st.download_button(
-            "⬇️ Download Regular Live Pivot", st.session_state["regular_pivot_bytes"],
-            "BUY_PLAN_OTB_REGULAR_LIVE_PIVOT.xlsx",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
-            key="download_regular_pivot",
-        )
+    regular_otb_bytes = create_otb_excel(regular_data_f, "regular")
+    st.download_button(
+        "⬇️ Download Regular OTB + Data",
+        regular_otb_bytes,
+        "BUY_PLAN_OTB_REGULAR_OCT_2026.xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+        key="download_regular_otb",
+    )
 
     st.markdown("### 🟨 Winter")
     winter_data_f = apply_filters(st.session_state.winter_data, filter_values)
@@ -977,22 +882,15 @@ with tab_download:
         use_container_width=True,
     )
 
-    if st.button("📊 Generate Winter Live PivotTable", use_container_width=True):
-        with st.spinner("Creating Winter Live PivotTable in Microsoft Excel..."):
-            try:
-                pivot_bytes = create_live_pivot_excel(winter_data_f, "winter")
-                st.session_state["winter_pivot_bytes"] = pivot_bytes
-                st.success("Winter Live PivotTable created.")
-            except Exception as e:
-                st.error(str(e))
-    if st.session_state.get("winter_pivot_bytes"):
-        st.download_button(
-            "⬇️ Download Winter Live Pivot", st.session_state["winter_pivot_bytes"],
-            "BUY_PLAN_OTB_WINTER_LIVE_PIVOT.xlsx",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
-            key="download_winter_pivot",
-        )
+    winter_otb_bytes = create_otb_excel(winter_data_f, "winter")
+    st.download_button(
+        "⬇️ Download Winter OTB + Data",
+        winter_otb_bytes,
+        "BUY_PLAN_OTB_WINTER_OCT_2026.xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+        key="download_winter_otb",
+    )
 
 st.divider()
-st.caption("BUY PLAN – OTB | Regular + Winter | User-supplied formulas and PPO logic applied.")
+st.caption("BUY PLAN – OTB | October 2026 | Regular + Winter | Cloud-safe output.")
