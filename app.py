@@ -4,6 +4,8 @@ import numpy as np
 from io import BytesIO
 from pathlib import Path
 from datetime import datetime, date
+import tempfile
+import os
 import re
 
 # ============================================================
@@ -27,44 +29,44 @@ ARTICLE_HIERARCHY = ["DIVISION", "SECTION", "DEPARTMENT", "ART_NM"]
 
 REGULAR_DATA_FIELDS = [
     "DIVISION", "SECTION", "DEPARTMENT", "ART_NM", "ATTRIBUTE",
-    "ART_STATUS", "PREFERENCE", "BP_SEP-26", "BP_OCT-26", "BP_NOV-26",
-    "BP_SON", "GRC_SEP", "PPO_SEP", "PPO_ALL", "TNA_Q", "CRRT_PO",
+    "ART_STATUS", "PREFERENCE", "BP_OCT-26", "BP_NOV-26", "BP_DEC-26",
+    "BP_OND", "GRC_OCT", "PPO_OCT", "PPO_ALL", "TNA_Q", "CRRT_PO",
 ]
 WINTER_DATA_FIELDS = [
     "DIVISION", "SECTION", "DEPARTMENT", "ART_NM", "ATTRIBUTE",
-    "PREFERENCE", "ART_STATUS", "BP_SEP-26", "BP_WINTER", "GRC_SEP",
-    "PPO_SEP", "PPO_ALL", "TNA_Q", "CRRT_PO",
+    "PREFERENCE", "ART_STATUS", "BP_OCT-26", "BP_WINTER", "GRC_OCT",
+    "PPO_OCT", "PPO_ALL", "TNA_Q", "CRRT_PO",
 ]
 REGULAR_OUTPUT = REGULAR_DATA_FIELDS + [
-    "FR_SEP%", "VI_SEP%", "REQ_SEP", "OTB_SEP", "PO_FR%_SEP", "OTB_SON", "PO_FR% SON",
+    "FR_OCT%", "VI_OCT%", "REQ_OCT", "OTB_OCT", "PO_FR%_OCT", "OTB_OND", "PO_FR% OND",
 ]
 WINTER_OUTPUT = WINTER_DATA_FIELDS + [
-    "FR%_SEP", "VI_SEP%", "REQ_SEP", "OTB_SEP", "PO_FR%_AUG", "OTB_WINTER", "PO_FR% WINTER",
+    "FR%_OCT", "VI_OCT%", "REQ_OCT", "OTB_OCT", "PO_FR%_OCT", "OTB_WINTER", "PO_FR% WINTER",
 ]
 REGULAR_CALCULATED_FIELDS = {
-    "FR_SEP%": "=MIN(IFERROR(GRC_SEP/'BP_SEP-26',0),1)",
-    "VI_SEP%": "=MIN(IFERROR((GRC_SEP+TNA_Q)/'BP_SEP-26',0),1)",
-    "REQ_SEP": "=IFERROR('BP_SEP-26'-(GRC_SEP+TNA_Q),0)",
-    "OTB_SEP": "=IFERROR('BP_SEP-26'-(GRC_SEP+PPO_SEP),0)",
-    "PO_FR%_SEP": "=MIN(IFERROR((GRC_SEP+PPO_SEP)/'BP_SEP-26',0),1)",
-    "OTB_SON": "=IFERROR(BP_SON-(GRC_SEP+PPO_ALL+CRRT_PO),0)",
-    "PO_FR% SON": "=MIN(IFERROR((GRC_SEP+PPO_ALL+CRRT_PO)/BP_SON,0),1)",
+    "FR_OCT%": "=MIN(IFERROR(GRC_OCT/'BP_OCT-26',0),1)",
+    "VI_OCT%": "=MIN(IFERROR((GRC_OCT+TNA_Q)/'BP_OCT-26',0),1)",
+    "REQ_OCT": "=IFERROR('BP_OCT-26'-(GRC_OCT+TNA_Q),0)",
+    "OTB_OCT": "=IFERROR('BP_OCT-26'-(GRC_OCT+PPO_OCT),0)",
+    "PO_FR%_OCT": "=MIN(IFERROR((GRC_OCT+PPO_OCT)/'BP_OCT-26',0),1)",
+    "OTB_OND": "=IFERROR(BP_OND-(GRC_OCT+PPO_ALL+CRRT_PO),0)",
+    "PO_FR% OND": "=MIN(IFERROR((GRC_OCT+PPO_ALL+CRRT_PO)/BP_OND,0),1)",
 }
 WINTER_CALCULATED_FIELDS = {
-    "FR%_SEP": "=MIN(IFERROR(GRC_SEP/'BP_SEP-26',0),1)",
-    "VI_SEP%": "=MIN(IFERROR((GRC_SEP+TNA_Q)/'BP_SEP-26',0),1)",
-    "REQ_SEP": "=IFERROR('BP_SEP-26'-(GRC_SEP+TNA_Q),0)",
-    "OTB_SEP": "=IFERROR('BP_SEP-26'-(GRC_SEP+PPO_SEP),0)",
-    "PO_FR%_AUG": "=MIN(IFERROR((GRC_SEP+PPO_SEP)/'BP_SEP-26',0),1)",
-    "OTB_WINTER": "=IFERROR(BP_WINTER-(GRC_SEP+PPO_ALL+CRRT_PO),0)",
-    "PO_FR% WINTER": "=MIN(IFERROR((GRC_SEP+PPO_ALL+CRRT_PO)/BP_WINTER,0),1)",
+    "FR%_OCT": "=MIN(IFERROR(GRC_OCT/'BP_OCT-26',0),1)",
+    "VI_OCT%": "=MIN(IFERROR((GRC_OCT+TNA_Q)/'BP_OCT-26',0),1)",
+    "REQ_OCT": "=IFERROR('BP_OCT-26'-(GRC_OCT+TNA_Q),0)",
+    "OTB_OCT": "=IFERROR('BP_OCT-26'-(GRC_OCT+PPO_OCT),0)",
+    "PO_FR%_OCT": "=MIN(IFERROR((GRC_OCT+PPO_OCT)/'BP_OCT-26',0),1)",
+    "OTB_WINTER": "=IFERROR(BP_WINTER-(GRC_OCT+PPO_ALL+CRRT_PO),0)",
+    "PO_FR% WINTER": "=MIN(IFERROR((GRC_OCT+PPO_ALL+CRRT_PO)/BP_WINTER,0),1)",
 }
 NUMERIC_BASE = [
-    "BP_SEP-26", "BP_OCT-26", "BP_NOV-26", "BP_SON", "BP_WINTER",
-    "GRC_SEP", "PPO_SEP", "PPO_ALL", "TNA_Q", "CRRT_PO",
+    "BP_OCT-26", "BP_NOV-26", "BP_DEC-26", "BP_OND", "BP_WINTER",
+    "GRC_OCT", "PPO_OCT", "PPO_ALL", "TNA_Q", "CRRT_PO",
 ]
 PERCENT_COLS = [
-    "FR_SEP%", "VI_SEP%", "PO_FR%_SEP", "PO_FR% SON", "FR%_SEP", "PO_FR%_AUG", "PO_FR% WINTER",
+    "FR_OCT%", "VI_OCT%", "PO_FR%_OCT", "PO_FR% OND", "FR%_OCT", "PO_FR% WINTER",
 ]
 
 # ============================================================
@@ -179,43 +181,43 @@ def prepare_winter(df):
 # ============================================================
 def calculate_regular(df):
     df = df.copy()
-    for c in ["BP_SEP-26", "BP_SON", "GRC_SEP", "PPO_SEP", "PPO_ALL", "TNA_Q", "CRRT_PO"]:
+    for c in ["BP_OCT-26", "BP_OND", "GRC_OCT", "PPO_OCT", "PPO_ALL", "TNA_Q", "CRRT_PO"]:
         if c not in df.columns:
             df[c] = 0
         df[c] = numeric_series(df[c])
 
-    bp_sep = df["BP_SEP-26"]
-    grc = df["GRC_SEP"]
+    bp_oct = df["BP_OCT-26"]
+    grc = df["GRC_OCT"]
     tna = df["TNA_Q"]
-    ppo_sep = df["PPO_SEP"]
+    ppo_oct = df["PPO_OCT"]
     ppo_all = df["PPO_ALL"]
     crrt = df["CRRT_PO"]
-    bp_son = df["BP_SON"]
+    bp_ond = df["BP_OND"]
 
-    df["VI_SEP%"] = np.minimum(np.where(bp_sep != 0, (grc + tna) / bp_sep, 0), 1)
-    df["REQ_SEP"] = (bp_sep - (grc + tna)).replace([np.inf, -np.inf], 0).fillna(0)
-    df["OTB_SEP"] = (bp_sep - (grc + ppo_sep)).replace([np.inf, -np.inf], 0).fillna(0)
-    df["PO_FR%_SEP"] = np.minimum(np.where(bp_sep != 0, (grc + ppo_sep) / bp_sep, 0), 1)
-    df["OTB_SON"] = (bp_son - (grc + ppo_all + crrt)).replace([np.inf, -np.inf], 0).fillna(0)
-    df["PO_FR% SON"] = np.minimum(
-        np.where(bp_son != 0, (grc + ppo_all + crrt) / bp_son, 0), 1
+    df["VI_OCT%"] = np.minimum(np.where(bp_oct != 0, (grc + tna) / bp_oct, 0), 1)
+    df["REQ_OCT"] = (bp_oct - (grc + tna)).replace([np.inf, -np.inf], 0).fillna(0)
+    df["OTB_OCT"] = (bp_oct - (grc + ppo_oct)).replace([np.inf, -np.inf], 0).fillna(0)
+    df["PO_FR%_OCT"] = np.minimum(np.where(bp_oct != 0, (grc + ppo_oct) / bp_oct, 0), 1)
+    df["OTB_OND"] = (bp_ond - (grc + ppo_all + crrt)).replace([np.inf, -np.inf], 0).fillna(0)
+    df["PO_FR% OND"] = np.minimum(
+        np.where(bp_ond != 0, (grc + ppo_all + crrt) / bp_ond, 0), 1
     )
-    df["FR_SEP%"] = np.minimum(np.where(bp_sep != 0, grc / bp_sep, 0), 1)
+    df["FR_OCT%"] = np.minimum(np.where(bp_oct != 0, grc / bp_oct, 0), 1)
     return df
 
 
 def calculate_winter(df):
     df = df.copy()
-    for c in ["BP_SEP-26", "BP_WINTER", "GRC_SEP", "PPO_SEP", "PPO_ALL", "TNA_Q", "CRRT_PO"]:
+    for c in ["BP_OCT-26", "BP_WINTER", "GRC_OCT", "PPO_OCT", "PPO_ALL", "TNA_Q", "CRRT_PO"]:
         if c not in df.columns:
             df[c] = 0
         df[c] = numeric_series(df[c])
 
-    bp_sep = df["BP_SEP-26"]
+    bp_oct = df["BP_OCT-26"]
     bp_winter = df["BP_WINTER"]
-    grc = df["GRC_SEP"]
+    grc = df["GRC_OCT"]
     tna = df["TNA_Q"]
-    ppo_sep = df["PPO_SEP"]
+    ppo_oct = df["PPO_OCT"]
     ppo_all = df["PPO_ALL"]
     crrt = df["CRRT_PO"]
 
@@ -223,12 +225,12 @@ def calculate_winter(df):
     df["PO_FR% WINTER"] = np.minimum(
         np.where(bp_winter != 0, (grc + ppo_all + crrt) / bp_winter, 0), 1
     )
-    df["FR%_SEP"] = np.minimum(np.where(bp_sep != 0, grc / bp_sep, 0), 1)
-    df["VI_SEP%"] = np.minimum(np.where(bp_sep != 0, (grc + tna) / bp_sep, 0), 1)
-    df["REQ_SEP"] = (bp_sep - (grc + tna)).replace([np.inf, -np.inf], 0).fillna(0)
-    df["OTB_SEP"] = (bp_sep - (grc + ppo_sep)).replace([np.inf, -np.inf], 0).fillna(0)
-    df["PO_FR%_AUG"] = np.minimum(
-        np.where(bp_sep != 0, (grc + ppo_sep) / bp_sep, 0), 1
+    df["FR%_OCT"] = np.minimum(np.where(bp_oct != 0, grc / bp_oct, 0), 1)
+    df["VI_OCT%"] = np.minimum(np.where(bp_oct != 0, (grc + tna) / bp_oct, 0), 1)
+    df["REQ_OCT"] = (bp_oct - (grc + tna)).replace([np.inf, -np.inf], 0).fillna(0)
+    df["OTB_OCT"] = (bp_oct - (grc + ppo_oct)).replace([np.inf, -np.inf], 0).fillna(0)
+    df["PO_FR%_OCT"] = np.minimum(
+        np.where(bp_oct != 0, (grc + ppo_oct) / bp_oct, 0), 1
     )
     return df
 
@@ -265,9 +267,9 @@ def prepare_grc(uploaded_file):
         "DEPARTMENT": df[cols["DEPARTMENT"]].map(clean_text),
         "ART_NM": df[cols["ART_NM"]].map(clean_text),
         "ATTRIBUTE": df[cols["ATTRIBUTE"]].map(clean_text),
-        "GRC_SEP": numeric_series(df[cols["GRC_QTY"]]),
+        "GRC_OCT": numeric_series(df[cols["GRC_QTY"]]),
     })
-    return out.groupby(HIERARCHY, dropna=False, as_index=False)["GRC_SEP"].sum()
+    return out.groupby(HIERARCHY, dropna=False, as_index=False)["GRC_OCT"].sum()
 
 # ============================================================
 # TNA - ARTICLE LEVEL, NO ATTRIBUTE
@@ -299,7 +301,7 @@ def prepare_tna(uploaded_file):
 
 # ============================================================
 # CURRENT PPO - ARTICLE LEVEL, MONTH LOGIC
-# PPO_SEP = September 2026 + all months before September 2026
+# PPO_OCT = October 2026 + all delivery months before October 2026
 # PPO_ALL = total PPO quantity across all supplied months
 # ============================================================
 def parse_month_series(s):
@@ -326,7 +328,7 @@ def prepare_ppo(uploaded_file):
       Current PPO = CRRT_PO.
       If Current PPO is not uploaded, CRRT_PO = 0.
 
-    The PO Pending + Schedule Date file is used separately for PPO_SEP
+    The PO Pending + Schedule Date file is used separately for PPO_OCT
     and PPO_ALL.
     """
     sheet = find_sheet(uploaded_file, ["CURRENT PPO", "PPO", "DATA"])
@@ -366,10 +368,10 @@ def prepare_ppo(uploaded_file):
 # ============================================================
 def prepare_po_pending(po_file, schedule_file):
     """
-    PO Pending + Schedule Date supplies PPO_SEP and PPO_ALL.
+    PO Pending + Schedule Date supplies PPO_OCT and PPO_ALL.
 
     User rules:
-      * PPO_SEP = PO Pending Qty for September 2026 delivery + all
+      * PPO_OCT = PO Pending Qty for September 2026 delivery + all
         deliveries before September 2026.
       * PPO_ALL = ALL PO Pending Qty, regardless of delivery month.
       * CRRT_PO is NOT taken from PO Pending. CRRT_PO comes from the
@@ -424,17 +426,17 @@ def prepare_po_pending(po_file, schedule_file):
         "Unknown",
     )
 
-    # Fixed to the Buy Plan September-26 logic.
-    sep_start = pd.Timestamp(2026, 9, 1)
+    # Fixed to the Buy Plan October-26 logic.
     oct_start = pd.Timestamp(2026, 10, 1)
-    merged["PPO_SEP_FLAG"] = (
+    nov_start = pd.Timestamp(2026, 11, 1)
+    merged["PPO_OCT_FLAG"] = (
         merged["_SCHEDULE_DATE"].notna()
-        & (merged["_SCHEDULE_DATE"] < oct_start)
+        & (merged["_SCHEDULE_DATE"] < nov_start)
     )
 
-    # PPO_SEP = all delivery dates before October-26, i.e. Sep-26 + before Sep.
+    # PPO_OCT = all delivery dates before November-26, i.e. Oct-26 + all earlier delivery dates.
     # PPO_ALL = every non-zero PO Pending quantity.
-    merged["PPO_SEP"] = np.where(merged["PPO_SEP_FLAG"], merged["_PENDING_QTY"], 0)
+    merged["PPO_OCT"] = np.where(merged["PPO_OCT_FLAG"], merged["_PENDING_QTY"], 0)
     merged["PPO_ALL"] = merged["_PENDING_QTY"]
 
     po_month = (
@@ -444,7 +446,7 @@ def prepare_po_pending(po_file, schedule_file):
     )
 
     po_hierarchy = (
-        merged.groupby(HIERARCHY, dropna=False, as_index=False)[["PPO_SEP", "PPO_ALL"]]
+        merged.groupby(HIERARCHY, dropna=False, as_index=False)[["PPO_OCT", "PPO_ALL"]]
         .sum()
     )
 
@@ -521,132 +523,143 @@ def dataframe_to_excel(df, sheet_name="DATA"):
     return bio.getvalue()
 
 # ============================================================
-# CLOUD-COMPATIBLE PIVOT EXPORT
-# Streamlit Cloud runs Linux, so desktop Excel / pywin32 cannot be used.
-# This creates a Pivot-style Excel workbook with DATA + PIVOT SUMMARY.
+# LIVE PIVOT TABLE - EXCEL DESKTOP / PYWIN32
+# Tabular layout + repeat labels + subtotal only Division
 # ============================================================
 def create_live_pivot_excel(df, mode="regular"):
-    """Create a cloud-compatible Excel Pivot-style summary.
-
-    The workbook contains the source DATA and a PIVOT SUMMARY sheet.
-    All calculated percentages are recalculated from aggregated quantities,
-    matching the intended PivotTable calculated-field logic.
-    """
+    """Create a real Excel PivotTable; formulas are Pivot Calculated Fields, not DATA columns."""
+    try:
+        import win32com.client as win32
+    except ImportError:
+        raise RuntimeError("pywin32 is required. Run: python -m pip install pywin32")
     if df is None or df.empty:
-        raise ValueError(f"No {mode} data available for Pivot summary.")
+        raise ValueError(f"No {mode} data available for PivotTable.")
 
     mode = mode.lower()
     if mode == "regular":
         data_fields = REGULAR_DATA_FIELDS
-        row_fields = [
-            "DIVISION", "SECTION", "DEPARTMENT", "ART_NM",
-            "ATTRIBUTE", "ART_STATUS", "PREFERENCE"
-        ]
+        row_fields = ["DIVISION", "SECTION", "DEPARTMENT", "ART_NM", "ATTRIBUTE", "ART_STATUS", "PREFERENCE"]
         calculated_fields = REGULAR_CALCULATED_FIELDS
     else:
         data_fields = WINTER_DATA_FIELDS
-        row_fields = [
-            "DIVISION", "SECTION", "DEPARTMENT", "ART_NM",
-            "ATTRIBUTE", "PREFERENCE", "ART_STATUS"
-        ]
+        row_fields = ["DIVISION", "SECTION", "DEPARTMENT", "ART_NM", "ATTRIBUTE", "PREFERENCE", "ART_STATUS"]
         calculated_fields = WINTER_CALCULATED_FIELDS
 
     missing = [c for c in data_fields if c not in df.columns]
     if missing:
         raise ValueError(f"{mode.title()} DATA is missing fields: {', '.join(missing)}")
-
     source_df = df[data_fields].copy()
-    for col in data_fields:
-        if col not in row_fields:
-            source_df[col] = numeric_series(source_df[col])
-        else:
-            source_df[col] = source_df[col].map(clean_text)
 
-    # Aggregate exactly as a PivotTable would for SUM value fields.
-    value_fields = [c for c in data_fields if c not in row_fields]
-    pivot_df = (
-        source_df.groupby(row_fields, dropna=False, as_index=False)[value_fields]
-        .sum()
-    )
-
-    # Recalculate Pivot calculated fields from aggregated values.
-    if mode == "regular":
-        bp_sep = pivot_df["BP_SEP-26"]
-        grc = pivot_df["GRC_SEP"]
-        tna = pivot_df["TNA_Q"]
-        ppo_sep = pivot_df["PPO_SEP"]
-        ppo_all = pivot_df["PPO_ALL"]
-        crrt = pivot_df["CRRT_PO"]
-        bp_son = pivot_df["BP_SON"]
-
-        pivot_df["FR_SEP%"] = np.minimum(np.where(bp_sep != 0, grc / bp_sep, 0), 1)
-        pivot_df["VI_SEP%"] = np.minimum(np.where(bp_sep != 0, (grc + tna) / bp_sep, 0), 1)
-        pivot_df["REQ_SEP"] = (bp_sep - (grc + tna)).fillna(0)
-        pivot_df["OTB_SEP"] = (bp_sep - (grc + ppo_sep)).fillna(0)
-        pivot_df["PO_FR%_SEP"] = np.minimum(
-            np.where(bp_sep != 0, (grc + ppo_sep) / bp_sep, 0), 1
-        )
-        pivot_df["OTB_SON"] = (bp_son - (grc + ppo_all + crrt)).fillna(0)
-        pivot_df["PO_FR% SON"] = np.minimum(
-            np.where(bp_son != 0, (grc + ppo_all + crrt) / bp_son, 0), 1
-        )
-        output_fields = REGULAR_OUTPUT
-    else:
-        bp_sep = pivot_df["BP_SEP-26"]
-        bp_winter = pivot_df["BP_WINTER"]
-        grc = pivot_df["GRC_SEP"]
-        tna = pivot_df["TNA_Q"]
-        ppo_sep = pivot_df["PPO_SEP"]
-        ppo_all = pivot_df["PPO_ALL"]
-        crrt = pivot_df["CRRT_PO"]
-
-        pivot_df["FR%_SEP"] = np.minimum(np.where(bp_sep != 0, grc / bp_sep, 0), 1)
-        pivot_df["VI_SEP%"] = np.minimum(np.where(bp_sep != 0, (grc + tna) / bp_sep, 0), 1)
-        pivot_df["REQ_SEP"] = (bp_sep - (grc + tna)).fillna(0)
-        pivot_df["OTB_SEP"] = (bp_sep - (grc + ppo_sep)).fillna(0)
-        pivot_df["PO_FR%_AUG"] = np.minimum(
-            np.where(bp_sep != 0, (grc + ppo_sep) / bp_sep, 0), 1
-        )
-        pivot_df["OTB_WINTER"] = (bp_winter - (grc + ppo_all + crrt)).fillna(0)
-        pivot_df["PO_FR% WINTER"] = np.minimum(
-            np.where(bp_winter != 0, (grc + ppo_all + crrt) / bp_winter, 0), 1
-        )
-        output_fields = WINTER_OUTPUT
-
-    # Keep the requested output order and ensure all fields exist.
-    for col in output_fields:
-        if col not in pivot_df.columns:
-            pivot_df[col] = 0
-    pivot_df = pivot_df[output_fields]
-
-    bio = BytesIO()
-    with pd.ExcelWriter(bio, engine="openpyxl") as writer:
+    temp_dir = tempfile.mkdtemp(prefix="buyplan_otb_")
+    source_path = os.path.join(temp_dir, f"{mode.upper()}_DATA.xlsx")
+    output_path = os.path.join(temp_dir, f"BUY_PLAN_OTB_{mode.upper()}_LIVE_PIVOT.xlsx")
+    with pd.ExcelWriter(source_path, engine="openpyxl") as writer:
         source_df.to_excel(writer, index=False, sheet_name="DATA")
-        pivot_df.to_excel(writer, index=False, sheet_name="LIVE PIVOT")
-
         style_excel_sheet(writer.book["DATA"])
-        style_excel_sheet(writer.book["LIVE PIVOT"])
 
-        pivot_ws = writer.book["LIVE PIVOT"]
-        pivot_ws.freeze_panes = "A2"
-        pivot_ws.auto_filter.ref = pivot_ws.dimensions
+    excel = wb = None
+    try:
+        excel = win32.DispatchEx("Excel.Application")
+        excel.Visible = False
+        excel.DisplayAlerts = False
+        wb = excel.Workbooks.Open(os.path.abspath(source_path))
+        ws = wb.Worksheets("DATA")
+        source_range = ws.Range(ws.Cells(1,1), ws.Cells(ws.UsedRange.Rows.Count, ws.UsedRange.Columns.Count))
+        table = ws.ListObjects.Add(1, source_range, None, 1)
+        table.Name = "OTBData"
+        pivot_ws = wb.Worksheets.Add(After=ws)
+        pivot_ws.Name = "LIVE PIVOT"
+        pivot_ws.Range("A1").Value = f"BUY PLAN – OTB | {mode.upper()} LIVE PIVOT"
+        pivot_ws.Range("A1").Font.Name = "Aptos"
+        pivot_ws.Range("A1").Font.Size = 8
+        pivot_ws.Range("A1").Font.Bold = True
 
-        for idx, col in enumerate(pivot_df.columns, start=1):
-            if "%" in str(col):
-                for r in range(2, pivot_ws.max_row + 1):
-                    pivot_ws.cell(r, idx).number_format = "0.0%"
+        cache = wb.PivotCaches().Create(SourceType=1, SourceData="OTBData")
+        pivot = cache.CreatePivotTable(TableDestination="'LIVE PIVOT'!R3C1", TableName="OTB_Live_Pivot")
 
-        # Add a clear note that this is the cloud-compatible equivalent.
-        pivot_ws.insert_rows(1)
-        pivot_ws["A1"] = f"BUY PLAN – OTB | {mode.upper()} PIVOT SUMMARY"
-        pivot_ws["A1"].font = __import__("openpyxl").styles.Font(
-            name="Aptos", size=8, bold=True
-        )
-        pivot_ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(output_fields))
-        style_excel_sheet(pivot_ws, freeze="A3")
+        for pos, field in enumerate(row_fields, start=1):
+            pf = pivot.PivotFields(field)
+            pf.Orientation = 1
+            pf.Position = pos
+            for i in range(1,13):
+                try: pf.Subtotals[i] = False
+                except Exception: pass
 
-    bio.seek(0)
-    return bio.getvalue()
+        try: pivot.RowAxisLayout(1)
+        except Exception: pass
+        try: pivot.RepeatAllLabels(2)
+        except Exception: pass
+
+        # Base numeric fields -> normal Pivot values.
+        for field in [c for c in data_fields if c not in row_fields]:
+            pf = pivot.PivotFields(field)
+            data_field = pivot.AddDataField(pf, f"Sum of {field}", -4157)
+            data_field.NumberFormat = "#,##0.00"
+
+        # Formula fields -> TRUE PivotTable Calculated Fields.
+        calc_collection = pivot.CalculatedFields()
+        for name, formula in calculated_fields.items():
+            try:
+                calc_collection.Item(name).Delete()
+            except Exception:
+                pass
+            try:
+                calc_collection.Add(name, formula, True)
+                # Excel does not immediately expose a newly-created calculated
+                # field through PivotFields. Refresh before adding it to Values.
+                pivot.RefreshTable()
+                try:
+                    wb.RefreshAll()
+                except Exception:
+                    pass
+                pf = pivot.PivotFields(name)
+
+                # Excel can raise 0x800A03EC when AddDataField is used on a
+                # PivotTable Calculated Field. Put the field in Values directly.
+                pf.Orientation = 4   # xlDataField
+                try:
+                    pf.Function = -4157  # xlSum
+                except Exception:
+                    pass
+                try:
+                    pf.Name = name
+                except Exception:
+                    pass
+                try:
+                    pf.NumberFormat = "0.0%" if "%" in name else "#,##0.00"
+                except Exception:
+                    pass
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Could not add calculated field '{name}' to Pivot. "
+                    f"Formula: {formula}. Excel error: {exc}"
+                )
+
+        # NO subtotals + NO grand totals.
+        for field in row_fields:
+            pf = pivot.PivotFields(field)
+            for i in range(1,13):
+                try: pf.Subtotals[i] = False
+                except Exception: pass
+        pivot.RowGrand = False
+        pivot.ColumnGrand = False
+        pivot.HasAutoFormat = True
+        ws.Cells.Font.Name = "Aptos"; ws.Cells.Font.Size = 8
+        pivot_ws.Cells.Font.Name = "Aptos"; pivot_ws.Cells.Font.Size = 8
+        try: pivot_ws.Columns.AutoFit()
+        except Exception: pass
+
+        wb.SaveAs(os.path.abspath(output_path), FileFormat=51)
+        wb.Close(SaveChanges=True); wb = None
+        with open(output_path, "rb") as f:
+            return f.read()
+    finally:
+        try:
+            if wb is not None: wb.Close(SaveChanges=False)
+        except Exception: pass
+        try:
+            if excel is not None: excel.Quit()
+        except Exception: pass
 
 # ============================================================
 # SIDEBAR INPUTS
@@ -709,11 +722,11 @@ if process:
                 # GRC: current month only.
                 if grc_file is not None:
                     grc = prepare_grc(grc_file)
-                    regular = merge_hierarchy_level(regular, grc, ["GRC_SEP"])
-                    winter = merge_hierarchy_level(winter, grc, ["GRC_SEP"])
+                    regular = merge_hierarchy_level(regular, grc, ["GRC_OCT"])
+                    winter = merge_hierarchy_level(winter, grc, ["GRC_OCT"])
                 else:
-                    regular["GRC_SEP"] = 0
-                    winter["GRC_SEP"] = 0
+                    regular["GRC_OCT"] = 0
+                    winter["GRC_OCT"] = 0
 
                 # TNA: article level, no ATTRIBUTE. Apply once to each attribute row.
                 if tna_file is not None:
@@ -724,19 +737,19 @@ if process:
                     regular["TNA_Q"] = 0
                     winter["TNA_Q"] = 0
 
-                # PO Pending + Schedule Date -> PPO_SEP and PPO_ALL.
-                # PPO_SEP = September-26 delivery + every delivery before Sep-26.
+                # PO Pending + Schedule Date -> PPO_OCT and PPO_ALL.
+                # PPO_OCT = October-26 delivery + every delivery before Oct-26.
                 # PPO_ALL = ALL PO Pending Qty.
                 if po_file is not None and schedule_file is not None:
                     po_detail, po_month, po_hierarchy = prepare_po_pending(po_file, schedule_file)
-                    regular = merge_hierarchy_level(regular, po_hierarchy, ["PPO_SEP", "PPO_ALL"])
-                    winter = merge_hierarchy_level(winter, po_hierarchy, ["PPO_SEP", "PPO_ALL"])
+                    regular = merge_hierarchy_level(regular, po_hierarchy, ["PPO_OCT", "PPO_ALL"])
+                    winter = merge_hierarchy_level(winter, po_hierarchy, ["PPO_OCT", "PPO_ALL"])
                     st.session_state.po_pending = po_detail
                     st.session_state.po_month = po_month
                 else:
-                    regular["PPO_SEP"] = 0
+                    regular["PPO_OCT"] = 0
                     regular["PPO_ALL"] = 0
-                    winter["PPO_SEP"] = 0
+                    winter["PPO_OCT"] = 0
                     winter["PPO_ALL"] = 0
                     st.session_state.po_pending = None
                     st.session_state.po_month = None
@@ -786,10 +799,10 @@ if regular is None or winter is None:
         """
         ### Input logic
         - **GM_PRPO / Buy Plan:** base BP quantities and article attributes/status.
-        - **PO Pending + Schedule Date:** `PPO_SEP` and `PPO_ALL` from Pending Qty + delivery date.
-        - **PPO_SEP:** September-26 delivery + all delivery months before September-26.
+        - **PO Pending + Schedule Date:** `PPO_OCT` and `PPO_ALL` from Pending Qty + delivery date.
+        - **PPO_OCT:** October-26 delivery + all delivery months before October-26.
         - **PPO_ALL:** all PO Pending Qty.
-        - **GRC Report:** current-month GRC only = `GRC_SEP`.
+        - **GRC Report:** current-month GRC only = `GRC_OCT`.
         - **TNA:** optional article-level TNA; missing upload = 0.
         - **Current PPO:** same as `CRRT_PO`; missing upload = 0.
         """
@@ -820,9 +833,9 @@ winter_f = apply_filters(winter, filter_values)
 
 sort_metric_options = [
     c for c in [
-        "BP_SEP-26", "BP_SON", "BP_WINTER", "GRC_SEP", "TNA_Q", "PPO_SEP", "PPO_ALL",
-        "CRRT_PO", "REQ_SEP", "OTB_SEP", "OTB_SON", "OTB_WINTER",
-        "FR_SEP%", "VI_SEP%", "PO_FR%_SEP", "PO_FR% SON", "FR%_SEP", "PO_FR%_AUG", "PO_FR% WINTER",
+        "BP_OCT-26", "BP_OND", "BP_WINTER", "GRC_OCT", "TNA_Q", "PPO_OCT", "PPO_ALL",
+        "CRRT_PO", "REQ_OCT", "OTB_OCT", "OTB_OND", "OTB_WINTER",
+        "FR_OCT%", "VI_OCT%", "PO_FR%_OCT", "PO_FR% OND", "FR%_OCT", "PO_FR% WINTER",
     ] if c in regular_f.columns or c in winter_f.columns
 ]
 sort_metric = st.sidebar.selectbox("Sort Metric", sort_metric_options, index=0)
@@ -840,27 +853,27 @@ tab_dashboard, tab_regular, tab_winter, tab_download = st.tabs(
 # ============================================================
 with tab_dashboard:
     st.subheader("BUY PLAN – OTB Dashboard")
-    bp_sep = regular_f["BP_SEP-26"].sum()
-    grc = regular_f["GRC_SEP"].sum()
+    bp_oct = regular_f["BP_OCT-26"].sum()
+    grc = regular_f["GRC_OCT"].sum()
     tna = regular_f["TNA_Q"].sum()
     ppo = regular_f["PPO_ALL"].sum()
     crrt = regular_f["CRRT_PO"].sum()
-    otb = regular_f["OTB_SEP"].sum()
-    fr = grc / bp_sep if bp_sep else 0
+    otb = regular_f["OTB_OCT"].sum()
+    fr = grc / bp_oct if bp_oct else 0
 
     c1, c2, c3, c4, c5, c6 = st.columns(6)
-    c1.metric("BP SEP", f"{bp_sep:,.0f}")
-    c2.metric("GRC SEP", f"{grc:,.0f}")
+    c1.metric("BP OCT", f"{bp_oct:,.0f}")
+    c2.metric("GRC OCT", f"{grc:,.0f}")
     c3.metric("TNA Qty", f"{tna:,.0f}")
     c4.metric("PPO ALL", f"{ppo:,.0f}")
     c5.metric("CRRT PO", f"{crrt:,.0f}")
-    c6.metric("FR SEP", f"{fr:.1%}")
+    c6.metric("FR OCT", f"{fr:.1%}")
 
     st.divider()
     st.subheader("1. High Plan Department Qty")
     dept = (
         regular_f.groupby("DEPARTMENT", dropna=False, as_index=False)
-        .agg(BP_SEP=("BP_SEP-26", "sum"), BP_SON=("BP_SON", "sum"), OTB_SEP=("OTB_SEP", "sum"), GRC_SEP=("GRC_SEP", "sum"))
+        .agg(BP_OCT=("BP_OCT-26", "sum"), BP_OND=("BP_OND", "sum"), OTB_OCT=("OTB_OCT", "sum"), GRC_OCT=("GRC_OCT", "sum"))
         .sort_values("BP_SEP", ascending=False).head(20)
     )
     st.dataframe(dept, use_container_width=True, hide_index=True)
@@ -868,7 +881,7 @@ with tab_dashboard:
     st.subheader("2. High / Low Fill Rate Achievement – Department")
     fr_dept = (
         regular_f.groupby("DEPARTMENT", dropna=False)
-        .agg(BP=("BP_SEP-26", "sum"), GRC=("GRC_SEP", "sum"))
+        .agg(BP=("BP_OCT-26", "sum"), GRC=("GRC_OCT", "sum"))
         .reset_index()
     )
     fr_dept["FR_ACH%"] = np.minimum(np.where(fr_dept["BP"] != 0, fr_dept["GRC"] / fr_dept["BP"], 0), 1)
@@ -925,7 +938,7 @@ with tab_winter:
 # ============================================================
 with tab_download:
     st.subheader("⬇️ Excel Downloads")
-    st.caption("Cloud-compatible Excel downloads. The Live Pivot export contains DATA plus a Pivot-style summary with the OTB calculations applied from aggregated quantities.")
+    st.caption("DATA downloads contain base fields only (NO formula columns). OTB formulas are Excel PivotTable Calculated Fields. All sheets use Aptos 8; PivotTable uses Tabular Form, Repeat All Item Labels, NO subtotals and NO grand totals.")
 
     st.markdown("### 🟦 Regular")
     regular_data_f = apply_filters(st.session_state.regular_data, filter_values)
@@ -937,18 +950,18 @@ with tab_download:
         use_container_width=True,
     )
 
-    if st.button("📊 Generate Regular Pivot Summary", use_container_width=True):
-        with st.spinner("Creating Regular Pivot summary..."):
+    if st.button("📊 Generate Regular Live PivotTable", use_container_width=True):
+        with st.spinner("Creating Regular Live PivotTable in Microsoft Excel..."):
             try:
                 pivot_bytes = create_live_pivot_excel(regular_data_f, "regular")
                 st.session_state["regular_pivot_bytes"] = pivot_bytes
-                st.success("Regular Pivot summary created.")
+                st.success("Regular Live PivotTable created.")
             except Exception as e:
                 st.error(str(e))
     if st.session_state.get("regular_pivot_bytes"):
         st.download_button(
             "⬇️ Download Regular Live Pivot", st.session_state["regular_pivot_bytes"],
-            "BUY_PLAN_OTB_REGULAR_PIVOT_SUMMARY.xlsx",
+            "BUY_PLAN_OTB_REGULAR_LIVE_PIVOT.xlsx",
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True,
             key="download_regular_pivot",
@@ -964,18 +977,18 @@ with tab_download:
         use_container_width=True,
     )
 
-    if st.button("📊 Generate Winter Pivot Summary", use_container_width=True):
-        with st.spinner("Creating Winter Pivot summary..."):
+    if st.button("📊 Generate Winter Live PivotTable", use_container_width=True):
+        with st.spinner("Creating Winter Live PivotTable in Microsoft Excel..."):
             try:
                 pivot_bytes = create_live_pivot_excel(winter_data_f, "winter")
                 st.session_state["winter_pivot_bytes"] = pivot_bytes
-                st.success("Winter Pivot summary created.")
+                st.success("Winter Live PivotTable created.")
             except Exception as e:
                 st.error(str(e))
     if st.session_state.get("winter_pivot_bytes"):
         st.download_button(
             "⬇️ Download Winter Live Pivot", st.session_state["winter_pivot_bytes"],
-            "BUY_PLAN_OTB_WINTER_PIVOT_SUMMARY.xlsx",
+            "BUY_PLAN_OTB_WINTER_LIVE_PIVOT.xlsx",
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True,
             key="download_winter_pivot",
