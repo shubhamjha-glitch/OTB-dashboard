@@ -371,8 +371,8 @@ def prepare_po_pending(po_file, schedule_file):
     PO Pending + Schedule Date supplies PPO_OCT and PPO_ALL.
 
     User rules:
-      * PPO_OCT = PO Pending Qty for September 2026 delivery + all
-        deliveries before September 2026.
+      * PPO_OCT = PO Pending Qty for October 2026 delivery + all
+        deliveries before October 2026.
       * PPO_ALL = ALL PO Pending Qty, regardless of delivery month.
       * CRRT_PO is NOT taken from PO Pending. CRRT_PO comes from the
         separate Current PPO file.
@@ -785,8 +785,14 @@ with tab_dashboard:
     st.subheader("1. High Plan Department Qty")
     dept = (
         regular_f.groupby("DEPARTMENT", dropna=False, as_index=False)
-        .agg(BP_OCT=("BP_OCT-26", "sum"), BP_OND=("BP_OND", "sum"), OTB_OCT=("OTB_OCT", "sum"), GRC_OCT=("GRC_OCT", "sum"))
-        .sort_values("BP_SEP", ascending=False).head(20)
+        .agg(
+            BP_OCT=("BP_OCT-26", "sum"),
+            BP_OND=("BP_OND", "sum"),
+            OTB_OCT=("OTB_OCT", "sum"),
+            GRC_OCT=("GRC_OCT", "sum"),
+        )
+        .sort_values("BP_OCT", ascending=False)
+        .head(20)
     )
     st.dataframe(dept, use_container_width=True, hide_index=True)
 
