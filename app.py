@@ -7,6 +7,23 @@ from datetime import datetime, date
 import tempfile
 import os
 import re
+import sys
+import platform
+
+
+# ============================================================
+# RUNTIME MODE: WINDOWS DESKTOP vs STREAMLIT CLOUD
+# ============================================================
+IS_WINDOWS = sys.platform.startswith("win")
+HAS_PYWIN32 = False
+if IS_WINDOWS:
+    try:
+        import win32com.client as win32
+        HAS_PYWIN32 = True
+    except Exception:
+        HAS_PYWIN32 = False
+
+DESKTOP_LIVE_PIVOT_AVAILABLE = IS_WINDOWS and HAS_PYWIN32
 
 # ============================================================
 # PAGE CONFIG
@@ -20,6 +37,12 @@ st.set_page_config(
 
 st.title("📊 BUY PLAN – OTB")
 st.caption(f"As On {datetime.now().strftime('%d-%b-%Y')}")
+if DESKTOP_LIVE_PIVOT_AVAILABLE:
+    st.caption("🖥️ Windows Desktop mode: Excel Live Pivot is available.")
+elif IS_WINDOWS:
+    st.caption("🖥️ Windows detected, but pywin32 is not installed. Normal Excel downloads remain available.")
+else:
+    st.caption("☁️ Cloud/Linux mode: normal OTB Excel downloads are available; Live Pivot is desktop-only.")
 
 # ============================================================
 # CONSTANTS
@@ -522,6 +545,178 @@ def dataframe_to_excel(df, sheet_name="DATA"):
     bio.seek(0)
     return bio.getvalue()
 
+
+# ============================================================
+# WINDOWS DESKTOP LIVE PIVOT
+# Requires Microsoft Excel + pywin32
+# ============================================================
+def create_live_pivot_excel(df, mode="regular"):
+    if not DESKTOP_LIVE_PIVOT_AVAILABLE:
+        raise RuntimeError(
+            "Live Pivot requires Windows, Microsoft Excel Desktop and pywin32. "
+            "Cloud/Linux uses the normal OTB Excel download instead."
+        )
+    if df is None or df.empty:
+        raise ValueError(f"No {mode} data available for PivotTable.")
+
+    mode = mode.lower()
+    if mode == "regular":
+        data_fields = REGULAR_DATA_FIELDS
+        row_fields = ["DIVISION", "SECTION", "DEPARTMENT", "ART_NM",
+                      "ATTRIBUTE", "ART_STATUS", "PREFERENCE"]
+        calculated_fields = REGULAR_CALCULATED_FIELDS
+    else:
+        data_fields = WINTER_DATA_FIELDS
+        row_fields = ["DIVISION", "SECTION", "DEPARTMENT", "ART_NM",
+                      "ATTRIBUTE", "PREFERENCE", "ART_STATUS"]
+        calculated_fields = WINTER_CALCULATED_FIELDS
+
+    missing = [c for c in data_fields if c not in df.columns]
+    if missing:
+        raise ValueError(f"{mode.title()} DATA is missing fields: {', '.join(missing)}")
+
+    source_df = df[data_fields].copy()
+
+    temp_dir = tempfile.mkdtemp(prefix="buyplan_otb_")
+    source_path = os.path.join(temp_dir, f"{mode.upper()}_DATA.xlsx")
+    output_path = os.path.join(
+        temp_dir, f"BUY_PLAN_OTB_{mode.upper()}_LIVE_PIVOT.xlsx"
+    )
+
+    with pd.ExcelWriter(source_path, engine="openpyxl") as writer:
+        source_df.to_excel(writer, index=False, sheet_name="DATA")
+        style_excel_sheet(writer.book["DATA"])
+
+    excel = None
+    wb = None
+    try:
+        excel = win32.DispatchEx("Excel.Application")
+        excel.Visible = False
+        excel.DisplayAlerts = False
+
+        wb = excel.Workbooks.Open(os.path.abspath(source_path))
+        ws = wb.Worksheets("DATA")
+
+        last_row = ws.UsedRange.Rows.Count
+        last_col = ws.UsedRange.Columns.Count
+        source_range = ws.Range(ws.Cells(1, 1), ws.Cells(last_row, last_col))
+
+        table = ws.ListObjects.Add(1, source_range, None, 1)
+        table.Name = "OTBData"
+
+        pivot_ws = wb.Worksheets.Add(After=ws)
+        pivot_ws.Name = "LIVE PIVOT"
+        pivot_ws.Range("A1").Value = f"BUY PLAN – OTB | {mode.upper()} LIVE PIVOT"
+
+        cache = wb.PivotCaches().Create(SourceType=1, SourceData="OTBData")
+        pivot = cache.CreatePivotTable(
+            TableDestination="'LIVE PIVOT'!R3C1",
+            TableName=f"OTB_{mode.upper()}_Pivot"
+        )
+
+        # Row hierarchy
+        for pos, field in enumerate(row_fields, start=1):
+            pf = pivot.PivotFields(field)
+            pf.Orientation = 1  # xlRowField
+            pf.Position = pos
+            for i in range(1, 13):
+                try:
+                    pf.Subtotals[i] = False
+                except Exception:
+                    pass
+
+        try:
+            pivot.RowAxisLayout(1)  # xlTabularRow
+        except Exception:
+            pass
+        try:
+            pivot.RepeatAllLabels(2)  # xlRepeatLabels
+        except Exception:
+            pass
+
+        # Base numeric values
+        for field in [c for c in data_fields if c not in row_fields]:
+            pf = pivot.PivotFields(field)
+            data_field = pivot.AddDataField(pf, f"Sum of {field}", -4157)
+            data_field.NumberFormat = "#,##0.00"
+
+        # True Pivot Calculated Fields
+        calc_collection = pivot.CalculatedFields()
+        for name, formula in calculated_fields.items():
+            try:
+                calc_collection.Item(name).Delete()
+            except Exception:
+                pass
+
+            try:
+                calc_collection.Add(name, formula, True)
+                pivot.RefreshTable()
+                try:
+                    wb.RefreshAll()
+                except Exception:
+                    pass
+
+                pf = pivot.PivotFields(name)
+                pf.Orientation = 4  # xlDataField
+                try:
+                    pf.Function = -4157  # xlSum
+                except Exception:
+                    pass
+                try:
+                    pf.Name = name
+                except Exception:
+                    pass
+                try:
+                    pf.NumberFormat = "0.0%" if "%" in name else "#,##0.00"
+                except Exception:
+                    pass
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Could not add calculated field '{name}'. "
+                    f"Formula: {formula}. Excel error: {exc}"
+                )
+
+        # No subtotals / grand totals
+        for field in row_fields:
+            pf = pivot.PivotFields(field)
+            for i in range(1, 13):
+                try:
+                    pf.Subtotals[i] = False
+                except Exception:
+                    pass
+
+        pivot.RowGrand = False
+        pivot.ColumnGrand = False
+
+        ws.Cells.Font.Name = "Aptos"
+        ws.Cells.Font.Size = 8
+        pivot_ws.Cells.Font.Name = "Aptos"
+        pivot_ws.Cells.Font.Size = 8
+        try:
+            pivot_ws.Columns.AutoFit()
+        except Exception:
+            pass
+
+        wb.SaveAs(os.path.abspath(output_path), FileFormat=51)
+        wb.Close(SaveChanges=True)
+        wb = None
+
+        with open(output_path, "rb") as f:
+            return f.read()
+
+    finally:
+        try:
+            if wb is not None:
+                wb.Close(SaveChanges=False)
+        except Exception:
+            pass
+        try:
+            if excel is not None:
+                excel.Quit()
+        except Exception:
+            pass
+
+
 # ============================================================
 # CLOUD-SAFE OTB EXCEL OUTPUT
 # Works on Streamlit Cloud/Linux - no pywin32 / Excel Desktop
@@ -878,6 +1073,28 @@ with tab_download:
         key="download_regular_otb",
     )
 
+    if DESKTOP_LIVE_PIVOT_AVAILABLE:
+        if st.button("📊 Generate Regular Live PivotTable", use_container_width=True, key="gen_regular_live"):
+            with st.spinner("Creating Regular Live PivotTable in Microsoft Excel..."):
+                try:
+                    st.session_state["regular_live_pivot"] = create_live_pivot_excel(
+                        regular_data_f, "regular"
+                    )
+                    st.success("Regular Live PivotTable created.")
+                except Exception as e:
+                    st.error(str(e))
+
+        if st.session_state.get("regular_live_pivot"):
+            st.download_button(
+                "⬇️ Download Regular Live Pivot",
+                st.session_state["regular_live_pivot"],
+                "BUY_PLAN_OTB_REGULAR_OCT_2026_LIVE_PIVOT.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+                key="download_regular_live_pivot",
+            )
+
+
     st.markdown("### 🟨 Winter")
     winter_data_f = apply_filters(st.session_state.winter_data, filter_values)
     winter_bytes = dataframe_to_excel(winter_data_f, "WINTER DATA")
@@ -897,6 +1114,28 @@ with tab_download:
         use_container_width=True,
         key="download_winter_otb",
     )
+
+    if DESKTOP_LIVE_PIVOT_AVAILABLE:
+        if st.button("📊 Generate Winter Live PivotTable", use_container_width=True, key="gen_winter_live"):
+            with st.spinner("Creating Winter Live PivotTable in Microsoft Excel..."):
+                try:
+                    st.session_state["winter_live_pivot"] = create_live_pivot_excel(
+                        winter_data_f, "winter"
+                    )
+                    st.success("Winter Live PivotTable created.")
+                except Exception as e:
+                    st.error(str(e))
+
+        if st.session_state.get("winter_live_pivot"):
+            st.download_button(
+                "⬇️ Download Winter Live Pivot",
+                st.session_state["winter_live_pivot"],
+                "BUY_PLAN_OTB_WINTER_OCT_2026_LIVE_PIVOT.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+                key="download_winter_live_pivot",
+            )
+
 
 st.divider()
 st.caption("BUY PLAN – OTB | October 2026 | Regular + Winter | Cloud-safe output.")
